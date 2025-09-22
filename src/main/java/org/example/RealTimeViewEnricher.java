@@ -1,6 +1,8 @@
 package org.example;
 
 
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -41,8 +43,8 @@ public class RealTimeViewEnricher {
                 .setBootstrapServers(KAFKA_BROKER)
                 .setTopics(TOPIC_NAME)
                 .setGroupId("flink-dashboard-consumer")
-                .setStartingOffsets(OffsetsInitializer.earliest())
                 .setValueOnlyDeserializer(new SimpleStringSchema())
+                .setStartingOffsets(OffsetsInitializer.earliest())
                 .build();
 
         DataStream<String> kafkaStream = env.fromSource(kafkaSource, WatermarkStrategy.noWatermarks(), "Kafka Source");
@@ -92,8 +94,24 @@ public class RealTimeViewEnricher {
                         $("w").end().as("window_end")
                 );
 
-        // 5. Convert to DataStream and Print to a Sink
-        t_env.toDataStream(resultTable).print();
+
+
+        DataStream<EventCount> resultStream = t_env
+                .toDataStream(resultTable)
+                .map(row -> {
+                    EventCount eventCount = new EventCount();
+                    eventCount.eventType = (String) row.getField("event_type");
+                    eventCount.eventCount = (Long) row.getField("event_count");
+                    eventCount.windowEnd = row.getField("window_end").toString();
+                    return eventCount;
+                });
+
+
+//        resultStream.print();
+
+        resultStream.addSink(new PrometheusPushGatewaySink("pushgateway:9091", "flink_windowed_job"));
+
+        System.out.println();
 
         System.out.println("Submitting Flink job...");
         env.execute("Real-time Enrichment Job");
